@@ -1,0 +1,52 @@
+@startuml C4_L3_Component_pi_coding_agent
+' C4 Level 3 — Components of pi_coding_agent (packages/coding-agent/src/pi_coding_agent).
+!include _standard/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+title Component View — pi_coding_agent (CLI app)
+
+Person(dev, "Developer", "Runs pi")
+Container_Ext(agent, "pi_agent", "Python library", "Agent loop")
+Container_Ext(tui, "pi_tui", "Python library", "Terminal UI")
+Container_Ext(ai, "pi_ai", "Python library", "Models + streaming")
+ContainerDb_Ext(sessions, "Session logs", "JSONL")
+ContainerDb_Ext(config, "Config & credentials", "JSON")
+System_Ext(fs, "Local filesystem", "Files + shell")
+
+Container_Boundary(coding, "pi_coding_agent") {
+  Component(main, "main / CLI", "main.py", "Parse args, load extensions, create session, pick mode")
+  Component(modes, "Modes", "modes/{interactive,print_mode,rpc}", "Interactive TUI, single-shot print, JSON-RPC headless")
+  Component(session, "AgentSession", "core/agent_session.py", "Lifecycle: build tools/prompt, wire Agent, persist on message_end, auto-retry, overflow compaction, model/thinking cycling")
+  Component(sm, "SessionManager", "core/session_manager.py", "JSONL tree store: append_message/custom, branch, build_session_context")
+  Component(tools, "Coding tools", "core/tools/*", "read, write, edit, bash, grep, find, ls → AgentTool factories")
+  Component(compaction, "Compaction", "core/compaction/*", "should_compact, compact_context, estimate_tokens, summarization prompt")
+  Component(messages, "Message conversion", "core/messages.py", "wrap_convert_to_llm: custom types → LLM messages, image blocking")
+  Component(prompt, "System prompt", "core/system_prompt.py", "build_system_prompt(cwd, selected_tools)")
+  Component(ext, "Extensions", "core/extensions/*", "loader, runner, ExtensionAPI: register tools/commands/handlers/flags")
+  Component(settings, "SettingsManager", "core/settings_manager.py", "Global+project settings merge")
+  Component(modelreg, "ModelRegistry", "core/model_registry.py", "Built-in + custom models; env resolution")
+  Component(auth, "AuthStorage", "core/auth_storage.py", "Resolve API keys / OAuth per provider")
+}
+
+Rel(dev, main, "pi [args]")
+Rel(main, modes, "dispatch")
+Rel(modes, session, "prompt(); subscribe(on_event)")
+Rel(modes, tui, "render (interactive)")
+Rel(session, agent, "Agent(AgentOptions); set_tools/model; prompt")
+Rel(session, tools, "build_tools(cwd)")
+Rel(session, messages, "convert_to_llm wrapper")
+Rel(session, prompt, "build_system_prompt")
+Rel(session, sm, "append_message; build_context")
+Rel(session, compaction, "should_compact / compact_context")
+Rel(session, settings, "load settings")
+Rel(session, modelreg, "resolve default model")
+Rel(session, auth, "resolve_api_key")
+Rel(modelreg, ai, "get_model()")
+Rel(auth, config, "read credentials")
+Rel(settings, config, "read settings/models")
+Rel(sm, sessions, "JSONL append / load")
+Rel(tools, fs, "read/write/edit; run shell")
+Rel(main, ext, "discover & load")
+Rel(ext, session, "register tools / transform context (planned)")
+
+@enduml

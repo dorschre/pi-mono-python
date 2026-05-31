@@ -1,0 +1,42 @@
+@startuml seq_tool_execution
+title Sequence — Tool execution with mid-run steering
+
+participant "_run_loop\nagent_loop.py" as loop
+participant "_execute_tool_calls\nagent_loop.py" as exec
+participant "validate_tool_arguments\nai/utils/validation.py" as val
+participant "AgentTool.execute\ncore/tools/*" as tool
+participant "EventStream" as ev
+participant "StateTransitionSystem\nstate.py" as state
+
+loop -> exec : _execute_tool_calls(tools, assistant_msg, cancel, ev, get_steering)
+loop over each ToolCall in assistant_msg.content
+  exec -> ev : push tool_execution_start
+  exec -> exec : find tool by name
+  alt tool found
+    exec -> val : validate_tool_arguments(tool, call)
+    val --> exec : validated args
+    exec -> tool : execute(id, args, cancel, on_update)
+    tool -> ev : on_update(partial) -> tool_execution_update
+    tool --> exec : AgentToolResult(content, details)
+  else tool missing / raises
+    exec -> exec : build error AgentToolResult (is_error=True)
+  end
+  exec -> ev : push tool_execution_end
+  exec -> ev : message_start + message_end (ToolResultMessage)
+
+  opt steering message queued mid-run
+    exec -> exec : get_steering_messages() returns msgs
+    note over exec : remaining tool calls are skipped
+    exec -> ev : _skip_tool_call() -> "Skipped due to queued user message"
+    exec -> exec : break loop
+  end
+end
+exec --> loop : { tool_results, steering_messages }
+
+loop -> state : apply(Observation tool_result, evidence=[tool_call_id]) for each result
+alt steering_after_tools present
+  note over loop : inject as pending messages next turn
+else
+  loop -> loop : poll get_steering_messages() again
+end
+@enduml

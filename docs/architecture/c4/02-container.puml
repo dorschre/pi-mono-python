@@ -1,0 +1,33 @@
+@startuml C4_L2_Container
+' C4 Level 2 — Containers (the four workspace packages + data stores).
+!include _standard/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+title Container View — pi coding agent (uv workspace: packages/*)
+
+Person(dev, "Developer", "Prompts and steers the agent")
+
+System_Ext(llm, "LLM Provider APIs", "Anthropic / OpenAI / Google / Bedrock / Azure")
+System_Ext(oauth, "OAuth providers", "Token auth")
+
+System_Boundary(pi, "pi coding agent") {
+  Container(coding, "pi_coding_agent", "Python app (entry: pi)", "CLI + modes (interactive/print/rpc), AgentSession, SessionManager, file/shell tools, compaction, extensions, settings/model/auth")
+  Container(tui, "pi_tui", "Python library", "Terminal UI: differential renderer, editor, components, autocomplete, key bindings")
+  Container(agent, "pi_agent", "Python library", "Agent loop, Agent wrapper, pluggable StateTransitionSystem, agent types/events")
+  Container(ai, "pi_ai", "Python library", "Unified LLM streaming: provider registry, provider adapters, models, OAuth utils, event stream")
+}
+
+ContainerDb(sessions, "Session logs", "JSONL files", "Append-only, tree-structured per-thread message/transition history (~/.pi/agent/sessions)")
+ContainerDb(config, "Config & credentials", "JSON files", "settings.json, models.json, auth.json")
+
+Rel(dev, coding, "Runs / prompts", "TUI · stdin-stdout · JSON-RPC")
+Rel(coding, tui, "Renders interactive UI", "in-process")
+Rel(coding, agent, "Drives the agent loop; injects tools, convert_to_llm, state_system", "in-process")
+Rel(agent, ai, "Streams assistant responses", "stream_simple()")
+Rel(coding, ai, "Resolves models & API keys; provider registry", "in-process")
+Rel(ai, llm, "Streaming chat + tool calls", "HTTPS / SSE")
+Rel(ai, oauth, "Token issue/refresh", "HTTPS")
+Rel(coding, sessions, "Appends messages; rebuilds context", "JSONL")
+Rel(coding, config, "Loads settings, custom models, credentials", "JSON")
+
+@enduml

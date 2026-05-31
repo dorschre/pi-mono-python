@@ -1,0 +1,34 @@
+@startuml seq_compaction
+title Sequence — Overflow-aware auto-compaction
+
+participant "Agent\nagent.py" as agent
+participant "AgentSession\nagent_session.py" as session
+participant "_post_turn_checks\nagent_session.py" as post
+participant "compaction\ncore/compaction/*" as comp
+participant "is_context_overflow\nai/utils/overflow.py" as overflow
+participant "stream_simple (summary)\nai/stream.py" as llm
+participant "SessionManager\nsession_manager.py" as sm
+
+agent -> session : AgentEvent(agent_end) with last AssistantMessage
+session -> post : _post_turn_checks(msg)
+post -> post : reset overflow guard on success
+alt retryable error (overloaded / 429 / 5xx)
+  post -> session : _handle_retryable_error (exponential backoff, continue_from_context)
+  note over post : retry takes priority; skip compaction this pass
+else
+  post -> session : _check_compaction(msg)
+  session -> overflow : is_context_overflow(usage, context_window)?
+  session -> comp : should_compact(messages, usage, settings)
+  comp -> comp : estimate_tokens() vs reserve / threshold
+  alt should compact
+    session -> comp : compact_context(...)
+    comp -> llm : summarize older messages (Goal/Progress/Decisions/Next)
+    llm --> comp : summary
+    comp --> session : kept messages + summary
+    session -> sm : append compaction entry (summary, firstKeptEntryId, tokensBefore)
+    session -> agent : replace_messages(compacted context)
+  else within budget
+    note over session : no-op
+  end
+end
+@enduml

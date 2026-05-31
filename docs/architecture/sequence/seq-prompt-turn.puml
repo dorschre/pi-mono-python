@@ -1,0 +1,55 @@
+@startuml seq_prompt_turn
+title Sequence — One prompt turn (end to end)
+
+actor Developer as dev
+participant "mode\n(interactive/print/rpc)" as mode
+participant "AgentSession\nagent_session.py" as session
+participant "Agent\nagent.py" as agent
+participant "agent_loop / _run_loop\nagent_loop.py" as loop
+participant "StateTransitionSystem\nstate.py" as state
+participant "_stream_assistant_response\nagent_loop.py" as stream
+participant "stream_simple\nai/stream.py" as ssimple
+participant "ApiProvider\nai/providers/*" as provider
+participant "SessionManager\nsession_manager.py" as sm
+
+dev -> mode : type prompt
+mode -> session : prompt(text)
+session -> session : validate model + API key
+session -> agent : prompt([UserMessage])
+agent -> loop : agent_loop(prompts, context, config, stream_fn)
+loop -> state : (config.state_system or AppendOnly)()
+loop -> state : seed(context.messages)
+loop -> state : apply(Observation prompt)
+note over loop : emit agent_start / turn_start / message_start+end(prompt)
+
+loop -> stream : _stream_assistant_response(context, system, config)
+stream -> state : materialize()
+state --> stream : working messages
+stream -> stream : transform_context() + convert_to_llm()
+stream -> ssimple : stream_simple(model, Context, opts)
+ssimple -> provider : get_api_provider(model.api).stream_simple(...)
+provider --> stream : events (start, text/thinking/toolcall deltas, done)
+note over stream : emit message_start / message_update* / message_end
+stream --> loop : final AssistantMessage
+loop -> state : apply(Observation assistant)
+
+alt assistant requested tool calls
+  loop -> loop : _execute_tool_calls(...)
+  note over loop : see seq-tool-execution
+  loop -> state : apply(Observation tool_result, evidence=[tool_call_id])
+  loop -> stream : next turn (loop back)
+else final answer
+  note over loop : no more tool calls, no follow-ups
+end
+
+loop --> agent : agent_end(messages = system.new_messages())
+
+== persistence (per message, via events) ==
+agent -> session : AgentEvent(message_end) on each message
+session -> sm : append_message(message)
+sm -> sm : write JSONL line (id, parentId)
+
+session -> session : _post_turn_checks (retry? compaction?)
+session --> mode : streamed events
+mode --> dev : rendered output
+@enduml

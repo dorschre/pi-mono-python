@@ -1,0 +1,35 @@
+@startuml act_build_session_context
+title Activity — build_session_context reconstruction (session_manager.py)
+
+start
+if (leaf_id is None (explicit)?) then (yes)
+  :return empty SessionContext;
+  stop
+endif
+:resolve leaf (by_id[leaf_id] or last entry);
+if (no leaf?) then (yes)
+  :return empty SessionContext;
+  stop
+endif
+
+:walk leaf -> root via parentId\nbuild ordered path[];
+
+:scan path for settings;
+note right
+  thinking_level_change -> thinking_level
+  model_change / assistant.provider -> model
+  compaction -> remember latest compaction
+end note
+
+if (compaction on path?) then (yes)
+  :emit compaction summary message\n(tokensBefore recorded);
+  :find compaction index in path;
+  :from firstKeptEntryId..compaction:\nappend kept messages;
+  :after compaction..end:\nappend messages;
+else (no)
+  :append every message on path;
+endif
+
+:return SessionContext(messages, thinking_level, model);
+stop
+@enduml

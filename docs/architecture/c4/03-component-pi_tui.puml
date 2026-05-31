@@ -1,0 +1,33 @@
+@startuml C4_L3_Component_pi_tui
+' C4 Level 3 — Components of pi_tui (packages/tui/src/pi_tui).
+!include _standard/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+title Component View — pi_tui (terminal UI library)
+
+Container_Ext(coding, "pi_coding_agent", "Python app", "Interactive mode drives the TUI")
+System_Ext(term, "Terminal", "stdin/stdout, ANSI, key events")
+
+Container_Boundary(tui, "pi_tui") {
+  Component(tuicore, "TUI runtime", "tui.py", "Top-level loop: owns component tree, schedules differential renders to the terminal")
+  Component(terminal, "Terminal / renderer", "terminal.py", "ANSI output, cursor + screen control, differential diffing")
+  Component(stdin, "Input pipeline", "stdin_buffer.py, keys.py, keybindings.py", "Raw stdin buffering, key decoding, configurable bindings")
+  Component(editor, "Editor", "editor_component.py, components/editor.py", "Multi-line input editing")
+  Component(undo, "Edit support", "undo_stack.py, kill_ring.py", "Undo/redo + kill-ring (cut/yank)")
+  Component(autocomplete, "Autocomplete", "autocomplete.py, fuzzy.py", "AutocompleteProvider protocol + fuzzy matching")
+  Component(components, "Components", "components/*", "text, markdown, input, select_list, settings_list, loader, image, box, spacer, truncated_text")
+  Component(img, "Image support", "terminal_image.py, components/image.py", "Inline terminal image rendering")
+}
+
+Rel(coding, tuicore, "mount components; feed agent events")
+Rel(tuicore, components, "compose + render")
+Rel(tuicore, terminal, "flush differential frames")
+Rel(tuicore, stdin, "receive key events")
+Rel(stdin, editor, "edit keys")
+Rel(editor, undo, "record/replay edits")
+Rel(editor, autocomplete, "suggestions")
+Rel(components, img, "render images")
+Rel(terminal, term, "ANSI writes")
+Rel(stdin, term, "raw reads")
+
+@enduml

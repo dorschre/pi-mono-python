@@ -1,0 +1,43 @@
+@startuml seq_state_transition
+title Sequence — Pluggable StateTransitionSystem across a run
+
+participant "agent_loop\nagent_loop.py" as loop
+participant "_run_loop\nagent_loop.py" as run
+participant "_stream_assistant_response\nagent_loop.py" as stream
+participant "StateTransitionSystem\n(AppendOnlyStateSystem)\nstate.py" as sys
+participant "convert_to_llm\ncore/messages.py" as conv
+
+note over loop, sys : factory = config.state_system or AppendOnlyStateSystem
+
+loop -> sys : system = factory()
+loop -> sys : seed(context.messages)
+note right of sys : seeded messages are prior context\n(NOT counted in new_messages)
+loop -> sys : apply(Observation(type=prompt, actor=user, message))
+sys -> sys : version += 1; append message; record Transition
+
+loop -> run : drive turns
+
+group each turn
+  run -> stream : _stream_assistant_response(...)
+  stream -> sys : materialize()
+  sys --> stream : [seed + applied] working messages
+  stream -> conv : convert_to_llm(materialized)
+  conv --> stream : LLM-visible messages
+  note over stream : streaming partial stays loop-local;\nonly the final message is committed
+  stream --> run : final AssistantMessage
+  run -> sys : apply(Observation(type=assistant, actor=assistant, message))
+
+  opt tool calls
+    run -> sys : apply(Observation(type=tool_result, actor=tool, evidence=[tool_call_id]))
+  end
+
+  opt steering / follow-up injected
+    run -> sys : apply(Observation(type=steering|follow_up, actor=user, message))
+  end
+end
+
+run -> sys : new_messages()
+sys --> run : run delta (excludes seed)
+run -> sys : transitions()  // first-class log: id, from/to version, actor, evidence
+note over loop, sys : default adapter == historical append-only behavior;\nalternate adapters can trim materialize(), event-source, etc.
+@enduml

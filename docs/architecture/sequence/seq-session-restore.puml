@@ -1,0 +1,33 @@
+@startuml seq_session_restore
+title Sequence — Session restore / switch
+
+actor Developer as dev
+participant "AgentSession\nagent_session.py" as session
+participant "SessionManager\nsession_manager.py" as sm
+participant "build_session_context\nsession_manager.py" as build
+participant "Agent\nagent.py" as agent
+participant "ModelRegistry / get_model" as models
+
+dev -> session : switch_session(path)
+session -> sm : SessionManager.open(path)
+sm -> sm : load JSONL entries (migrate to current version)
+session -> sm : build_context()
+sm -> build : build_session_context(entries, leaf_id)
+build -> build : walk leaf -> root via parentId
+build -> build : extract thinking_level + model\nfind latest compaction
+alt compaction on path
+  build -> build : emit compaction summary,\nthen kept messages from firstKeptEntryId
+else
+  build -> build : emit all messages on path
+end
+build --> sm : SessionContext(messages, thinking_level, model)
+sm --> session : context
+session -> agent : replace_messages(context.messages)
+opt context.model present
+  session -> models : get_model(provider, model_id)
+  models --> session : Model
+  session -> agent : set_model(Model)
+end
+session -> agent : set_thinking_level(context.thinking_level)
+session --> dev : session restored (ready to continue)
+@enduml

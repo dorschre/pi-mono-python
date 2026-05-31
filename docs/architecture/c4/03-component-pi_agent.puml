@@ -1,0 +1,36 @@
+@startuml C4_L3_Component_pi_agent
+' C4 Level 3 — Components of pi_agent (packages/agent/src/pi_agent).
+!include _standard/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+title Component View — pi_agent (agent loop + pluggable state)
+
+Container_Ext(coding, "pi_coding_agent", "Python app", "Owns AgentSession; injects tools, convert_to_llm, transform_context, state_system")
+Container_Ext(ai, "pi_ai", "Python library", "stream_simple() streaming layer")
+
+Container_Boundary(agent, "pi_agent") {
+  Component(agentcls, "Agent / AgentOptions", "agent.py", "Stateful wrapper: holds AgentState.messages, queues steering/follow-up, builds AgentLoopConfig per run, re-appends on message_end")
+  Component(loop, "agent_loop / agent_loop_continue", "agent_loop.py", "Entry points; seed the state system, emit prompt events, drive _run_loop")
+  Component(runloop, "_run_loop", "agent_loop.py", "Turn cycle: inject pending → stream → apply assistant → tools → steering/follow-up gates")
+  Component(stream, "_stream_assistant_response", "agent_loop.py", "Read-only: materialize() → transform_context → convert_to_llm → stream_fn; emits message events")
+  Component(exec, "_execute_tool_calls / _skip_tool_call", "agent_loop.py", "Validates args, runs AgentTool.execute, emits tool events, honors mid-run steering")
+  Component(state, "StateTransitionSystem (Protocol)\\nAppendOnlyStateSystem", "state.py", "Owns working-state list: seed/materialize/apply; records first-class Transition records")
+  Component(obs, "Observation / Transition", "state.py", "Transition input + lightweight first-class record (id, from/to version, actor, evidence)")
+  Component(types, "Types & events", "types.py", "AgentLoopConfig, AgentContext, AgentState, AgentTool, AgentEvent, StreamFn, ThinkingLevel")
+}
+
+Rel(coding, agentcls, "Constructs with AgentOptions(convert_to_llm, transform_context, state_system, stream_fn)")
+Rel(coding, agentcls, "subscribe(on_event); prompt() / steer() / follow_up()")
+Rel(agentcls, loop, "agent_loop(prompts, context, config, stream_fn)")
+Rel(loop, state, "(config.state_system or AppendOnly)(); seed(context.messages); apply(prompt)")
+Rel(loop, runloop, "drive turns")
+Rel(runloop, stream, "await assistant message")
+Rel(runloop, state, "apply(assistant / steering / follow_up / tool_result); new_messages()")
+Rel(runloop, exec, "on tool_use: execute tool calls")
+Rel(stream, state, "materialize() → model-visible messages")
+Rel(stream, ai, "stream_fn = stream_simple(model, Context, opts)")
+Rel(exec, types, "AgentTool.execute(...) → AgentToolResult")
+Rel(state, obs, "creates")
+Rel(agentcls, types, "AgentState / AgentEvent")
+
+@enduml

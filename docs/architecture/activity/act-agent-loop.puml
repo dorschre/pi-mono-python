@@ -1,0 +1,45 @@
+@startuml act_agent_loop
+title Activity — _run_loop control flow (agent_loop.py)
+
+start
+:seed state system with prior context;
+:apply prompt observations;
+:poll initial steering -> pending_messages;
+
+repeat
+  ' inner turn loop: while has_more_tool_calls OR pending_messages
+  while (has_more_tool_calls OR pending_messages?) is (yes)
+    if (not first turn?) then (yes)
+      :push turn_start;
+    endif
+    if (pending_messages?) then (yes)
+      :emit + apply each pending\n(type = steering | follow_up);
+      :clear pending_messages;
+    endif
+    :_stream_assistant_response()\n(materialize -> convert_to_llm -> stream);
+    :apply(assistant message);
+    if (stop_reason in {error, aborted}?) then (yes)
+      :push turn_end + agent_end\n(messages = new_messages());
+      stop
+    endif
+    if (assistant has tool calls?) then (yes)
+      :_execute_tool_calls();
+      :apply(tool_result) for each\n(evidence = tool_call_id);
+      :has_more_tool_calls = true;
+    else (no)
+      :has_more_tool_calls = false;
+    endif
+    :push turn_end;
+    if (steering after tools?) then (yes)
+      :pending_messages = steering_after_tools;
+    else (no)
+      :poll get_steering_messages() -> pending_messages;
+    endif
+  endwhile (no)
+
+  :poll get_follow_up_messages();
+repeat while (follow-up messages?) is (yes) not (no)
+
+:push agent_end (messages = new_messages());
+stop
+@enduml

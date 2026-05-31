@@ -1,0 +1,23 @@
+@startuml C4_L1_Context
+' C4 Level 1 — System Context for the pi-mono-python LM agent harness.
+!include _standard/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+title System Context — pi coding agent
+
+Person(dev, "Developer", "Works on a codebase by prompting and steering the pi CLI")
+
+System(pi, "pi coding agent", "Terminal LM-agent harness: runs a streaming agent loop with file/shell tools over a project (packages pi_ai, pi_agent, pi_coding_agent, pi_tui)")
+
+System_Ext(llm, "LLM Provider APIs", "Anthropic Messages, OpenAI Completions/Responses, Google GenAI/Vertex/Gemini-CLI, Amazon Bedrock, Azure OpenAI — streaming chat + tool calling")
+System_Ext(oauth, "OAuth providers", "Token issue/refresh for providers that use OAuth instead of API keys")
+System_Ext(fs, "Local project filesystem", "Source files the agent reads/writes/edits and the shell it executes")
+SystemDb_Ext(store, "Session & settings store", "~/.pi/agent: session JSONL logs, settings.json, auth.json, models.json")
+
+Rel(dev, pi, "Prompts, steers, reads streamed output", "TUI / stdin-stdout / RPC")
+Rel(pi, llm, "Streams completions and tool calls", "HTTPS / SSE")
+Rel(pi, oauth, "Obtains and refreshes access tokens", "HTTPS")
+Rel(pi, fs, "Reads, writes, edits files; runs commands", "OS / subprocess")
+Rel_R(pi, store, "Persists & restores sessions; loads settings, models, keys", "JSONL / JSON files")
+
+@enduml

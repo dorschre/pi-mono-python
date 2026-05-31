@@ -1,0 +1,50 @@
+@startuml act_stream_assistant
+title Activity — _stream_assistant_response streaming (agent_loop.py)
+
+start
+:messages = system.materialize();
+if (transform_context configured?) then (yes)
+  :messages = transform_context(messages, cancel);
+endif
+:llm_messages = convert_to_llm(messages);
+:build Context(system_prompt, llm_messages, tools);
+:resolve API key (config.get_api_key / api_key);
+:build SimpleStreamOptions;
+:response_stream = stream_fn(model, context, opts);
+
+repeat
+  :next event;
+  switch (event.type?)
+  case (start)
+    :partial_message = event.partial;
+    :added_partial = true;
+    :push message_start(partial);
+  case (text/thinking/toolcall delta)
+    if (partial_message set?) then (yes)
+      :partial_message = event.partial;
+      :push message_update(partial, event);
+    endif
+  case (done / error)
+    :final = event.message or event.error;
+    if (added_partial?) then (no)
+      :push message_start(final);
+    endif
+    :push message_end(final);
+    :return final;
+    stop
+  endswitch
+repeat while (more events?) is (yes) not (no)
+
+' fallback: stream ended without done/error
+if (partial_message present?) then (yes)
+  if (cancel_event set?) then (yes)
+    :raise "Request was aborted";
+    stop
+  endif
+  :return partial_message;
+  stop
+else (no)
+  :raise "Stream ended without a final message";
+  stop
+endif
+@enduml

@@ -1,0 +1,37 @@
+@startuml C4_L3_Component_pi_ai
+' C4 Level 3 — Components of pi_ai (packages/ai/src/pi_ai).
+!include _standard/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+title Component View — pi_ai (unified LLM streaming layer)
+
+Container_Ext(agent, "pi_agent", "Python library", "Calls stream_simple()")
+Container_Ext(coding, "pi_coding_agent", "Python app", "Resolves models & keys; uses model registry")
+System_Ext(llm, "LLM Provider APIs", "Anthropic / OpenAI / Google / Bedrock / Azure")
+System_Ext(oauth, "OAuth providers", "Token auth")
+
+Container_Boundary(ai, "pi_ai") {
+  Component(streamfn, "stream / stream_simple", "stream.py", "Public entry: resolve env key, look up provider by model.api, delegate, yield AssistantMessageEvent")
+  Component(registry, "api_registry", "api_registry.py", "ApiProvider Protocol + module-level registry: register/get/unregister by Api")
+  Component(builtins, "register_builtins", "providers/register_builtins.py", "Registers all built-in providers at import; wraps stream fns via _StreamFnProvider")
+  Component(providers, "Provider adapters", "providers/*.py", "anthropic, openai_completions/responses, google(+vertex, gemini_cli), amazon_bedrock, azure_openai_responses")
+  Component(models, "Models & registry", "models*.py", "Model metadata (provider, api, context_window, thinking) + get_model()")
+  Component(oauthutil, "OAuth utils", "utils/oauth/*", "OAuthProviderInterface; token issue/refresh/store")
+  Component(evstream, "EventStream", "utils/event_stream.py", "Async push/await stream primitive used for events + results")
+  Component(overflow, "overflow utils", "utils/overflow.py", "is_context_overflow(); validation helpers")
+  Component(aitypes, "Types", "types.py", "Context, Message(s), Model, Tool, AssistantMessageEvent, StreamOptions")
+}
+
+Rel(agent, streamfn, "stream_simple(model, Context, opts)")
+Rel(coding, models, "get_model() / resolve provider+id")
+Rel(coding, registry, "register custom providers (extensions)")
+Rel(streamfn, registry, "get_api_provider(model.api)")
+Rel(builtins, registry, "register_api_provider(api, provider)")
+Rel(registry, providers, "dispatch stream_simple()")
+Rel(providers, llm, "HTTPS / SSE streaming")
+Rel(providers, aitypes, "emit AssistantMessageEvent")
+Rel(providers, oauthutil, "resolve token when OAuth")
+Rel(oauthutil, oauth, "issue / refresh", "HTTPS")
+Rel(streamfn, evstream, "yields events")
+
+@enduml
