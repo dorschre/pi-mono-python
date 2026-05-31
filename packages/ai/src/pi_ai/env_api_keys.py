@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Maps provider name → environment variable name
 PROVIDER_ENV_VARS: dict[str, str] = {
+    "custom": "CUSTOM_API_KEY",
     "openai": "OPENAI_API_KEY",
     "google": "GEMINI_API_KEY",
     "google-gemini-cli": "GEMINI_API_KEY",

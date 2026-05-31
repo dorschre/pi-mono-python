@@ -51,7 +51,7 @@ from .types import (
 )
 
 # Model registry
-from .models import calculate_cost, get_model, get_models, get_providers, models_are_equal, supports_xhigh
+from .models import calculate_cost, get_custom_model, get_model, get_models, get_providers, models_are_equal, supports_xhigh
 
 # API registry
 from .api_registry import get_api_provider, get_api_providers, register_api_provider, unregister_api_providers, clear_api_providers
@@ -85,7 +85,7 @@ __all__ = [
     "EventToolCallStart", "EventToolCallDelta", "EventToolCallEnd",
     "EventDone", "EventError",
     # Models
-    "get_model", "get_providers", "get_models", "calculate_cost", "supports_xhigh", "models_are_equal",
+    "get_model", "get_custom_model", "get_providers", "get_models", "calculate_cost", "supports_xhigh", "models_are_equal",
     # Registry
     "register_api_provider", "get_api_provider", "get_api_providers", "unregister_api_providers", "clear_api_providers",
     # Keys

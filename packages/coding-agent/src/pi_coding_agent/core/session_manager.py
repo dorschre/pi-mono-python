@@ -783,6 +783,13 @@ class SessionManager:
         self._append_raw(entry)
         return entry["id"]
 
+    def append_entry(self, entry_type: str, data: dict[str, Any], parent_id: str | None = None) -> str:
+        """Append a generic typed entry. Satisfies the harness AgentSessionStore protocol."""
+        entry = self._make_entry(entry_type, dict(data))
+        if parent_id is not None:
+            entry["parentId"] = parent_id
+        return self._append_entry(entry)
+
     def append_message(self, message: dict[str, Any], parent_id: str | None = None) -> str:
         """Append a message entry."""
         entry = {

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from pi_agent import Agent, AgentOptions
+from pi_agent.harness import AgentHarness, FunctionAction, HarnessActionResult
 from pi_agent.state import StateSystemFactory
 from pi_agent.types import (
     AgentEvent,
@@ -128,6 +129,16 @@ class AgentSession:
         self._listeners: list[Callable[[AgentEvent], None]] = []
         self._agent.subscribe(self._on_agent_event)
 
+        # Generic harness: owns session persistence + the action registry. The coding
+        # session delegates message persistence and generic action dispatch to it.
+        self._harness = AgentHarness(
+            self._agent,
+            self._session_manager,
+            serialize_message=_message_to_dict,
+        )
+        self._harness.subscribe(self._on_harness_event)
+        self._register_harness_actions()
+
         # ── Auto-retry state ──────────────────────────────────────────────────
         self._retry_attempt: int = 0
         self._retry_event: asyncio.Event | None = None      # set when retry resolves/fails
@@ -218,8 +229,8 @@ class AgentSession:
             msg = getattr(event, "message", None)
             if msg is not None:
                 role = getattr(msg, "role", "")
-                if role in ("user", "assistant", "toolResult"):
-                    self._session_manager.append_message(_message_to_dict(msg))
+                # NOTE: message persistence is handled by the AgentHarness (which is
+                # subscribed to the same agent); AgentSession only tracks state here.
                 # Track last assistant message for retry/compaction
                 if role == "assistant":
                     self._last_assistant_msg = msg
@@ -268,6 +279,54 @@ class AgentSession:
                 listener(event)
             except Exception:
                 pass
+
+    def _on_harness_event(self, event: Any) -> None:
+        """Forward harness *lifecycle* events to session listeners.
+
+        Agent events are already forwarded by ``_on_agent_event``; only surface the
+        harness's own lifecycle/action events to avoid duplicates.
+        """
+        t = getattr(event, "type", None)
+        if t in ("session_start", "session_switch", "session_fork", "action_start", "action_end"):
+            self._emit(event)
+
+    # ── Generic action dispatch (delegates to the harness) ──────────────────────
+
+    def _register_harness_actions(self) -> None:
+        """Register coding-session actions on the harness so transports can use
+        ``run_action(name, args)`` instead of bespoke per-transport wiring."""
+        session = self
+
+        async def _fork(_h, args: dict[str, Any]) -> HarnessActionResult:
+            forked = await session.fork(args.get("entry_id"))
+            return HarnessActionResult(text="forked", details={"session_id": forked.session_id})
+
+        async def _switch_session(_h, args: dict[str, Any]) -> HarnessActionResult:
+            ok = await session.switch_session(args["path"])
+            return HarnessActionResult(text="switched", details={"ok": ok})
+
+        async def _compact(_h, args: dict[str, Any]) -> HarnessActionResult:
+            summary = await session.compact(args.get("custom_instructions"))
+            return HarnessActionResult(text=summary)
+
+        async def _prompt(_h, args: dict[str, Any]) -> HarnessActionResult:
+            await session.prompt(args["message"], source=args.get("source", "action"))
+            return HarnessActionResult(text="ok")
+
+        # These override the harness built-ins with coding-session-aware behavior.
+        self._harness.register_action(FunctionAction("fork", _fork))
+        self._harness.register_action(FunctionAction("switch_session", _switch_session))
+        self._harness.register_action(FunctionAction("compact", _compact))
+        self._harness.register_action(FunctionAction("prompt", _prompt))
+
+    @property
+    def harness(self) -> AgentHarness:
+        """The generic AgentHarness backing this coding session."""
+        return self._harness
+
+    async def run_action(self, name: str, args: dict[str, Any] | None = None) -> HarnessActionResult:
+        """Run a registered harness action by name (transport-agnostic dispatch)."""
+        return await self._harness.run_action(name, args)
 
     # ── Subscription ──────────────────────────────────────────────────────────
 
@@ -437,6 +496,7 @@ class AgentSession:
 
         new_sm = SessionManager.open(session_path)
         self._session_manager = new_sm
+        self._harness.session_store = new_sm  # keep harness persistence on the active store
         self.session_id = new_sm.get_session_id()
 
         # Restore context from session
