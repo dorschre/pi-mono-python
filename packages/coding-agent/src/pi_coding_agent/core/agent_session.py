@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from pi_agent import Agent, AgentOptions
+from pi_agent.state import StateSystemFactory
 from pi_agent.types import (
     AgentEvent,
     AgentMessage,
@@ -81,6 +82,7 @@ class AgentSession:
         auth_storage: AuthStorage | None = None,
         model_registry: ModelRegistry | None = None,
         settings_manager: SettingsManager | None = None,
+        state_system: StateSystemFactory | None = None,
     ) -> None:
         self.cwd = cwd or os.getcwd()
         self._settings = settings or Settings()
@@ -115,6 +117,7 @@ class AgentSession:
             get_api_key=self._resolve_api_key,
             convert_to_llm=convert_to_llm_fn,
             transform_context=self._transform_context,
+            state_system=state_system,
         )
         self._agent = Agent(opts)
         self._agent.set_model(resolved_model)

@@ -22,6 +22,11 @@ from pi_ai.types import (
 from pi_ai.utils.event_stream import EventStream
 from pi_ai.utils.validation import validate_tool_arguments
 
+from .state import (
+    AppendOnlyStateSystem,
+    Observation,
+    StateTransitionSystem,
+)
 from .types import (
     AgentContext,
     AgentEvent,
@@ -65,10 +70,11 @@ def agent_loop(
 
     async def _run():
         try:
-            new_messages: list[AgentMessage] = list(prompts)
+            system = (config.state_system or AppendOnlyStateSystem)()
+            system.seed(context.messages)
             current_context = AgentContext(
                 system_prompt=context.system_prompt,
-                messages=list(context.messages) + list(prompts),
+                messages=[],
                 tools=context.tools,
             )
 
@@ -77,8 +83,9 @@ def agent_loop(
             for prompt in prompts:
                 ev_stream.push(AgentEventMessageStart(message=prompt))
                 ev_stream.push(AgentEventMessageEnd(message=prompt))
+                system.apply(Observation(type="prompt", actor="user", message=prompt))
 
-            await _run_loop(current_context, new_messages, config, cancel_event, ev_stream, stream_fn)
+            await _run_loop(current_context, system, config, cancel_event, ev_stream, stream_fn)
         except Exception as e:
             # Ensure the stream is always terminated even if the loop crashes
             if not ev_stream._result_event.is_set():
@@ -109,17 +116,18 @@ def agent_loop_continue(
 
     async def _run():
         try:
-            new_messages: list[AgentMessage] = []
+            system = (config.state_system or AppendOnlyStateSystem)()
+            system.seed(context.messages)
             current_context = AgentContext(
                 system_prompt=context.system_prompt,
-                messages=list(context.messages),
+                messages=[],
                 tools=context.tools,
             )
 
             ev_stream.push(AgentEventAgentStart())
             ev_stream.push(AgentEventTurnStart())
 
-            await _run_loop(current_context, new_messages, config, cancel_event, ev_stream, stream_fn)
+            await _run_loop(current_context, system, config, cancel_event, ev_stream, stream_fn)
         except Exception as e:
             if not ev_stream._result_event.is_set():
                 ev_stream.fail(e)
@@ -130,7 +138,7 @@ def agent_loop_continue(
 
 async def _run_loop(
     current_context: AgentContext,
-    new_messages: list[AgentMessage],
+    system: StateTransitionSystem,
     config: AgentLoopConfig,
     cancel_event: asyncio.Event | None,
     ev_stream: EventStream[AgentEvent, list[AgentMessage]],
@@ -138,9 +146,14 @@ async def _run_loop(
 ) -> None:
     """
     Main loop logic — mirrors runLoop() in TypeScript.
+
+    All working-state mutations are routed through the pluggable `system`
+    (see state.py). The default AppendOnlyStateSystem makes this identical to the
+    historical loop; `system.new_messages()` is the run delta returned at agent_end.
     """
     first_turn = True
     pending_messages: list[AgentMessage] = []
+    pending_is_follow_up = False
     if config.get_steering_messages:
         pending_messages = await config.get_steering_messages()
 
@@ -156,23 +169,24 @@ async def _run_loop(
 
             # Inject pending messages
             if pending_messages:
+                pending_type = "follow_up" if pending_is_follow_up else "steering"
                 for msg in pending_messages:
                     ev_stream.push(AgentEventMessageStart(message=msg))
                     ev_stream.push(AgentEventMessageEnd(message=msg))
-                    current_context.messages.append(msg)
-                    new_messages.append(msg)
+                    system.apply(Observation(type=pending_type, actor="user", message=msg))
                 pending_messages = []
+                pending_is_follow_up = False
 
             # Stream assistant response
             message = await _stream_assistant_response(
-                current_context, config, cancel_event, ev_stream, stream_fn
+                current_context, system, config, cancel_event, ev_stream, stream_fn
             )
-            new_messages.append(message)
+            system.apply(Observation(type="assistant", actor="assistant", message=message))
 
             if message.stop_reason in ("error", "aborted"):
                 ev_stream.push(AgentEventTurnEnd(message=message, tool_results=[]))
-                ev_stream.push(AgentEventAgentEnd(messages=new_messages))
-                ev_stream.end(new_messages)
+                ev_stream.push(AgentEventAgentEnd(messages=system.new_messages()))
+                ev_stream.end(system.new_messages())
                 return
 
             # Check for tool calls
@@ -192,8 +206,12 @@ async def _run_loop(
                 steering_after_tools = execution.get("steering_messages")
 
                 for result in tool_results:
-                    current_context.messages.append(result)
-                    new_messages.append(result)
+                    system.apply(Observation(
+                        type="tool_result",
+                        actor="tool",
+                        message=result,
+                        evidence=[result.tool_call_id],
+                    ))
 
             ev_stream.push(AgentEventTurnEnd(message=message, tool_results=tool_results))
 
@@ -212,16 +230,18 @@ async def _run_loop(
 
         if follow_up_messages:
             pending_messages = follow_up_messages
+            pending_is_follow_up = True
             continue
 
         break
 
-    ev_stream.push(AgentEventAgentEnd(messages=new_messages))
-    ev_stream.end(new_messages)
+    ev_stream.push(AgentEventAgentEnd(messages=system.new_messages()))
+    ev_stream.end(system.new_messages())
 
 
 async def _stream_assistant_response(
     context: AgentContext,
+    system: StateTransitionSystem,
     config: AgentLoopConfig,
     cancel_event: asyncio.Event | None,
     ev_stream: EventStream[AgentEvent, list[AgentMessage]],
@@ -230,8 +250,14 @@ async def _stream_assistant_response(
     """
     Stream an assistant response from the LLM.
     Mirrors streamAssistantResponse() in TypeScript.
+
+    Read-only with respect to working state: the model-visible messages come from
+    `system.materialize()` and the streaming partial stays loop-local. The committed
+    final message is returned for `_run_loop` to apply through the state system.
     """
-    messages = context.messages
+    # System prompt and tools come from the run context; the message list is owned
+    # by the pluggable state-transition system.
+    messages = system.materialize()
 
     # Apply context transform if configured
     if config.transform_context:
@@ -290,7 +316,6 @@ async def _stream_assistant_response(
     async for event in response_stream:
         if event.type == "start":
             partial_message = event.partial
-            context.messages.append(partial_message)
             added_partial = True
             ev_stream.push(AgentEventMessageStart(message=partial_message))
 
@@ -301,7 +326,6 @@ async def _stream_assistant_response(
         ):
             if partial_message is not None:
                 partial_message = event.partial
-                context.messages[-1] = partial_message
                 ev_stream.push(AgentEventMessageUpdate(
                     message=partial_message,
                     assistant_message_event=event,
@@ -309,10 +333,6 @@ async def _stream_assistant_response(
 
         elif event.type in ("done", "error"):
             final_message = event.message if event.type == "done" else event.error
-            if added_partial:
-                context.messages[-1] = final_message
-            else:
-                context.messages.append(final_message)
             if not added_partial:
                 ev_stream.push(AgentEventMessageStart(message=final_message))
             ev_stream.push(AgentEventMessageEnd(message=final_message))
