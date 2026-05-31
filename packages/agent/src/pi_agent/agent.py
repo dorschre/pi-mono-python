@@ -25,6 +25,7 @@ from pi_ai.types import (
 )
 
 from .agent_loop import agent_loop, agent_loop_continue
+from .state import StateSystemFactory
 from .types import (
     AgentContext,
     AgentEvent,
@@ -63,6 +64,7 @@ class AgentOptions:
         thinking_budgets: ThinkingBudgets | None = None,
         transport: Transport = "sse",
         max_retry_delay_ms: int | None = None,
+        state_system: "StateSystemFactory | None" = None,
     ):
         self.initial_state = initial_state
         self.convert_to_llm = convert_to_llm
@@ -76,6 +78,7 @@ class AgentOptions:
         self.thinking_budgets = thinking_budgets
         self.transport = transport
         self.max_retry_delay_ms = max_retry_delay_ms
+        self.state_system = state_system
 
     @classmethod
     def from_dict(cls, opts_dict: dict[str, Any]) -> "AgentOptions":
@@ -125,6 +128,7 @@ class Agent:
         self._thinking_budgets: ThinkingBudgets | None = opts.thinking_budgets
         self._transport: Transport = opts.transport
         self._max_retry_delay_ms: int | None = opts.max_retry_delay_ms
+        self._state_system: StateSystemFactory | None = opts.state_system
 
         self._listeners: set[Callable[[AgentEvent], None]] = set()
         self._cancel_event: asyncio.Event | None = None
@@ -393,6 +397,7 @@ class Agent:
             on_payload=self._on_payload,
             get_steering_messages=get_steering,
             get_follow_up_messages=self._async_dequeue_follow_up,
+            state_system=self._state_system,
         )
 
         partial: AgentMessage | None = None

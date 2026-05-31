@@ -75,6 +75,12 @@ class AgentLoopConfig(SimpleStreamOptions):
     # Returns follow-up messages after agent would stop
     get_follow_up_messages: Callable[[], Awaitable[list[AgentMessage]]] | None = None
 
+    # Factory for the pluggable state-transition system (StateSystemFactory, i.e.
+    # Callable[[], StateTransitionSystem]). None → AppendOnlyStateSystem, which is
+    # behaviorally identical to the historical loop. Typed as a plain Callable here so
+    # pydantic does not attempt to resolve the protocol forward ref. See state.py.
+    state_system: Callable[[], Any] | None = None
+
     model_config = {"arbitrary_types_allowed": True}
 
 
