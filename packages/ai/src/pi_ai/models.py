@@ -3,6 +3,8 @@ Model registry and utilities — mirrors packages/ai/src/models.ts
 """
 from __future__ import annotations
 
+import os
+
 from .models_generated import MODELS
 from .types import Model, Usage
 
@@ -11,6 +13,42 @@ def get_model(provider: str, model_id: str) -> Model | None:
     """Get a model by provider and model ID. Returns None if not found."""
     key = f"{provider}/{model_id}"
     return MODELS.get(key)
+
+
+def get_custom_model() -> Model | None:
+    """Build a Model for a custom OpenAI-compatible endpoint from environment variables.
+
+    Reads ``CUSTOM_ENDPOINT`` and ``CUSTOM_MODEL`` (and optional
+    ``CUSTOM_CONTEXT_WINDOW``). The API key is resolved separately via
+    ``get_env_api_key("custom")`` -> ``CUSTOM_API_KEY``. Returns ``None`` when the
+    endpoint or model is not configured.
+
+    The returned model uses the ``openai-completions`` API with provider ``custom``;
+    the existing streaming path honors ``model.base_url`` and sends ``model.id`` as the
+    request model, so no provider changes are required.
+    """
+    endpoint = os.environ.get("CUSTOM_ENDPOINT")
+    model_id = os.environ.get("CUSTOM_MODEL")
+    if not endpoint or not model_id:
+        return None
+
+    context_window = 128000
+    raw_window = os.environ.get("CUSTOM_CONTEXT_WINDOW")
+    if raw_window:
+        try:
+            context_window = int(raw_window)
+        except ValueError:
+            pass
+
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="openai-completions",
+        provider="custom",
+        base_url=endpoint,
+        input=["text"],
+        context_window=context_window,
+    )
 
 
 def get_providers() -> list[str]:
