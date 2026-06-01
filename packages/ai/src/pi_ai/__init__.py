@@ -51,6 +51,7 @@ from .types import (
 )
 
 # Model registry
+from .discovery import EndpointDiscovery, discover_all_models, discover_models
 from .models import calculate_cost, get_custom_model, get_model, get_models, get_providers, models_are_equal, supports_xhigh
 
 # API registry
@@ -86,6 +87,7 @@ __all__ = [
     "EventDone", "EventError",
     # Models
     "get_model", "get_custom_model", "get_providers", "get_models", "calculate_cost", "supports_xhigh", "models_are_equal",
+    "discover_models", "discover_all_models", "EndpointDiscovery",
     # Registry
     "register_api_provider", "get_api_provider", "get_api_providers", "unregister_api_providers", "clear_api_providers",
     # Keys

@@ -312,6 +312,20 @@ async def run_rpc_mode(session: "AgentSession") -> None:
             models = await session.model_registry.get_available()
             return _success(cmd_id, "get_available_models", {"models": models})
 
+        elif cmd_type == "discover_models":
+            discovered = await session.discover_models()
+            return _success(cmd_id, "discover_models", {
+                "endpoints": [
+                    {
+                        "provider": d.provider,
+                        "base_url": d.base_url,
+                        "models": [m.id for m in d.models],
+                        "error": d.error,
+                    }
+                    for d in discovered
+                ],
+            })
+
         elif cmd_type == "set_thinking_level":
             session.set_thinking_level(command["level"])
             return _success(cmd_id, "set_thinking_level")
