@@ -891,6 +891,15 @@ class AgentSession:
         forked._agent.replace_messages(list(self._agent.state.messages))
         return forked
 
+    async def discover_models(self, *, timeout_s: float = 10.0) -> list[Any]:
+        """Autodiscover models from all configured OpenAI-compatible endpoints.
+
+        Delegates to the ModelRegistry; discovered models are registered in-memory and
+        immediately selectable via set_model/cycle_model/get_available. Returns the
+        per-endpoint EndpointDiscovery results.
+        """
+        return await self._model_registry.discover(timeout_s=timeout_s)
+
     def get_session_info(self) -> dict[str, Any]:
         """Get basic session information (backwards compat)."""
         return {

@@ -212,12 +212,17 @@ class ModelRegistry:
         self._registered_providers: dict[str, ProviderConfig] = {}
         self._load_error: str | None = None
         self._extra_models: list[Model] = []
+        # models.json provider configs (for autodiscovery): provider -> {base_url, api, api_key}
+        self._provider_configs: dict[str, dict[str, Any]] = {}
+        # (provider, id) of models added via autodiscovery (always shown as available)
+        self._discovered_ids: set[tuple[str, str]] = set()
 
         self._load_models()
 
     def _load_models(self) -> None:
         """(Re)load built-in + custom models."""
         self._custom_provider_api_keys.clear()
+        self._provider_configs.clear()
         self._load_error = None
 
         custom_models, overrides, model_overrides, error = self._load_custom_models()
@@ -339,6 +344,13 @@ class ModelRegistry:
             if prov_cfg.get("apiKey"):
                 self._custom_provider_api_keys[provider_name] = prov_cfg["apiKey"]
 
+            # Record provider endpoint config for autodiscovery.
+            self._provider_configs[provider_name] = {
+                "base_url": prov_cfg.get("baseUrl"),
+                "api": prov_cfg.get("api"),
+                "api_key": prov_cfg.get("apiKey"),
+            }
+
             if prov_cfg.get("modelOverrides"):
                 model_overrides[provider_name] = prov_cfg["modelOverrides"]
 
@@ -446,11 +458,22 @@ class ModelRegistry:
         """
         Get only models that have auth configured.
         Mirrors getAvailable() in TypeScript.
+
+        Models added via autodiscovery are always included — they were only
+        registered because their endpoint was reachable with the resolved key.
         """
         if self._auth_storage and hasattr(self._auth_storage, "has_auth"):
-            return [m for m in self._models if self._auth_storage.has_auth(m.provider)]
-        # Fallback: check environment variables
-        return [m for m in self._models if self._has_env_auth(m.provider)]
+            available = [m for m in self._models if self._auth_storage.has_auth(m.provider)]
+        else:
+            available = [m for m in self._models if self._has_env_auth(m.provider)]
+
+        seen = {(m.provider, m.id) for m in available}
+        for m in self._models:
+            key = (m.provider, m.id)
+            if key in self._discovered_ids and key not in seen:
+                available.append(m)
+                seen.add(key)
+        return available
 
     def _has_env_auth(self, provider: str) -> bool:
         """Check if a provider has auth via environment variable."""
@@ -528,6 +551,75 @@ class ModelRegistry:
         """Register an individual extra model."""
         self._extra_models.append(model)
         self._models.append(model)
+
+    def register_models(self, models: list[Model]) -> None:
+        """Register discovered models (deduped by provider/id); marks them available."""
+        for model in models:
+            key = (model.provider, model.id)
+            already = any(m.provider == model.provider and m.id == model.id for m in self._models)
+            if not already:
+                self._extra_models.append(model)
+                self._models.append(model)
+            self._discovered_ids.add(key)
+
+    async def discover(self, *, timeout_s: float = 10.0) -> list["EndpointDiscovery"]:
+        """Autodiscover models from every configured OpenAI-compatible endpoint.
+
+        Enumerates candidates from (1) built-in OpenAI-compatible providers with a
+        resolvable key, (2) the ``CUSTOM_*`` endpoint, and (3) ``models.json`` providers
+        declaring a ``baseUrl`` + OpenAI-compatible ``api``. Lists each concurrently,
+        registers the successes in-memory (so they become selectable), and returns the
+        per-endpoint results (including errors).
+        """
+        import asyncio
+
+        from pi_ai import get_custom_model
+        from pi_ai.discovery import (
+            EndpointDiscovery,
+            _openai_compatible_endpoints,
+            discover_models,
+        )
+
+        candidates: dict[str, tuple[str, str | None]] = {}
+
+        # (1) built-in OpenAI-compatible providers with a resolvable key
+        for provider, base_url in _openai_compatible_endpoints().items():
+            key = self.get_api_key(provider)
+            if key:
+                candidates[provider] = (base_url, key)
+
+        # (2) CUSTOM_* endpoint
+        custom = get_custom_model()
+        if custom:
+            candidates.setdefault("custom", (custom.base_url, self.get_api_key("custom")))
+
+        # (3) models.json providers with a base_url + OpenAI-compatible api
+        for provider, cfg in self._provider_configs.items():
+            base_url = cfg.get("base_url")
+            api = cfg.get("api")
+            if base_url and (api in ("openai-completions", "openai-responses") or api is None):
+                candidates.setdefault(provider, (base_url, self.get_api_key(provider)))
+
+        items = list(candidates.items())
+        if not items:
+            return []
+
+        async def _one(provider: str, base_url: str, key: str | None) -> "EndpointDiscovery":
+            try:
+                models = await discover_models(base_url, key, provider, timeout_s=timeout_s)
+                return EndpointDiscovery(provider=provider, base_url=base_url, models=models)
+            except Exception as e:
+                return EndpointDiscovery(provider=provider, base_url=base_url, error=str(e))
+
+        results = list(await asyncio.gather(*(_one(p, b, k) for p, (b, k) in items)))
+
+        for r in results:
+            if r.error is None and r.models:
+                self.register_models(r.models)
+                key = candidates[r.provider][1]
+                if key and r.provider not in self._custom_provider_api_keys:
+                    self._custom_provider_api_keys[r.provider] = key
+        return results
 
     def get_model(self, provider: str, model_id: str) -> Model:
         """Get a model by provider and ID."""
